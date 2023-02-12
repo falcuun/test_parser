@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 #define START_BYTE_0 0xFE
 #define START_BYTE_1 0xFB
@@ -250,6 +251,12 @@ void run_payload(frame_t *frame)
     free(parser.payload_buffer);
 }
 
+void *run_payload_thread(void *frame)
+{
+    run_payload((frame_t *)frame);
+    return NULL;
+}
+
 void TEST_ONE_eleven_valid_frames_singles(void)
 {
     frame_t frame;
@@ -359,9 +366,74 @@ void TEST_TWO_five_valid_frames_five_invalid_frames_singles(void)
     run_payload(&frame);
 }
 
+void TEST_THREE_one_valid_frame_one_thread(void)
+{
+    frame_t frame;
+    uint8_t validFrame1[14] = {0xFE, 0xFB, 0x09, 0x08, 0x01, 0xC0, 0xDE, 0xAB, 0x81, 0xC0, 0xDE, 0x5C, 0x8B, 0xD1};
+    frame.frame_message = validFrame1;
+    frame.frame_len = sizeof(validFrame1);
+    //  run_payload(&frame);
+
+    pthread_t thread_id;
+    int ret = pthread_create(&thread_id, NULL, run_payload_thread, (void *)&frame);
+    if (ret != 0)
+    {
+        return; // Error creating thread.
+    }
+    pthread_join(thread_id, NULL);
+}
+
+void TEST_FOUR_multiple_valid_frames_multiple_threads(void)
+{
+
+    frame_t frame1;
+    uint8_t validFrame1[14] = {0xFE, 0xFB, 0x09, 0x08, 0x01, 0xC0, 0xDE, 0xAB, 0x81, 0xC0, 0xDE, 0x5C, 0x8B, 0xD1};
+    frame1.frame_message = validFrame1;
+    frame1.frame_len = sizeof(validFrame1);
+    frame_t frame2;
+    uint8_t validFrame2[8] = {0xFE, 0xFB, 0x03, 0xAB, 0xCD, 0xAB, 0x4A, 0x25};
+    frame2.frame_message = validFrame2;
+    frame2.frame_len = sizeof(validFrame2);
+    frame_t frame3;
+    uint8_t validFrame3[10] = {0xFE, 0xFB, 0x05, 0x01, 0x02, 0x03, 0x04, 0x6E, 0x8C, 0x78};
+    frame3.frame_message = validFrame3;
+    frame3.frame_len = sizeof(validFrame3);
+    frame_t frame4;
+    uint8_t validFrame4[12] = {0xFE, 0xFB, 0x07, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0x5A, 0x86};
+    frame4.frame_message = validFrame4;
+    frame4.frame_len = sizeof(validFrame4);
+    frame_t frame5;
+    uint8_t validFrame5[14] = {0xFE, 0xFB, 0x09, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x16, 0xB2, 0x3A};
+    frame5.frame_message = validFrame5;
+    frame5.frame_len = sizeof(validFrame5);
+
+    const int NUMBER_OF_FRAMES = 5;
+
+    frame_t frames[] = {frame1, frame2, frame3, frame4, frame5};
+    pthread_t threads[NUMBER_OF_FRAMES];
+
+    uint8_t i;
+    uint8_t ret;
+    for (i = 0; i < NUMBER_OF_FRAMES; i++)
+    {
+        ret = pthread_create(&threads[i], NULL, run_payload_thread, (void *)&frames[i]);
+                if (ret != 0)
+        {
+            printf("Error creating thread: %d", threads[i]);
+            continue;
+        }
+    }
+
+    for (i = 0; i < NUMBER_OF_FRAMES; i++) {
+        pthread_join(threads[i], NULL);
+    }
+}
+
 int main()
 {
-    TEST_ONE_eleven_valid_frames_singles();
-    TEST_TWO_five_valid_frames_five_invalid_frames_singles();
+    // TEST_ONE_eleven_valid_frames_singles();
+    // TEST_TWO_five_valid_frames_five_invalid_frames_singles();
+    // TEST_THREE_one_valid_frame_one_thread();
+    // TEST_FOUR_multiple_valid_frames_multiple_threads();
     return 0;
 }
