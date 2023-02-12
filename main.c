@@ -11,6 +11,7 @@
 
 #define FRAME_SIZE_OFFSET 5 // To account for frame data (3 bytes in front (Start Bytes, Payload Length) and 2 in back (Checksum))
 
+
 enum PARSING_RESULT
 {
     RESULT_SUCCESS = 0xAA,
@@ -44,9 +45,21 @@ typedef struct parser
     uint16_t calculated_checksum;
 } parser_t;
 
-void parser_init(parser_t *parser, uint8_t frame_len);
+typedef struct frame
+{
+    uint8_t *frame_message;
+    uint8_t frame_len;
+} frame_t;
 
+// Forward Declarations
+void parser_init(parser_t *parser, uint8_t frame_len);
 uint16_t fletcher16(uint8_t *data, int count);
+uint8_t parser_appendByte(parser_t *parser, uint8_t *output_payload, uint8_t input_data);
+void parser_init(parser_t *parser, uint8_t frame_len);
+bool is_frame_valid(uint8_t *data, uint8_t data_len, uint16_t data_checksum);
+void check_frame(parser_t *parser);
+void run_payload(frame_t *frame);
+
 /// @brief Calculates Fletcher16 checksum
 /// @param data Pointer to array which is to be calculated
 /// @param count amount of elements in the array
@@ -219,15 +232,8 @@ void check_frame(parser_t *parser)
     }
 }
 
-typedef struct frame
-{
-    uint8_t *frame_message;
-    uint8_t frame_len;
-} frame_t;
-
 /// @brief Runs the frame validation process.
-/// @param frame_message The Whole frame including Start Bytes, Payload Len, Payload and Checksum.
-/// @param frame_len The length of the entire frame (all the bytes).
+/// @param frame The structure containing the frame message and its length.
 void run_payload(frame_t *frame)
 {
     parser_t parser;
