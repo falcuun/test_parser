@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 #define START_BYTE_0 0xFE
 #define START_BYTE_1 0xFB
@@ -63,19 +64,26 @@ uint16_t fletcher16(uint8_t *data, int count)
     return (sum2 << 8) | sum1;
 }
 
+typedef struct parser_input
+{
+    parser_t *parser;
+    uint8_t *output_payload;
+    uint8_t input_data;
+}parser_input_t;
+
 /// @brief Parser State Machine.    
 /// @param parser Parser whose state will be controlled
 /// @param output_payload Pointer to array for payload data 
 /// @param input_data  The byte that is to be checked.
 /// @return retunrs Failure or Success based on if there is any errors 
-uint8_t parser_appendByte(parser_t *parser, uint8_t *output_payload, uint8_t input_data)
+uint8_t parser_appendByte(parser_input_t *input_t)
 {
-    switch (parser->state)
+    switch (input_t->parser->state)
     {
     case STATE_LOOKING_FOR_START_BYTE_0:
-        if (input_data == START_BYTE_0)
+        if (input_t->input_data == START_BYTE_0)
         {
-            parser->state = STATE_LOOKING_FOR_START_BYTE_1;
+            input_t->parser->state = STATE_LOOKING_FOR_START_BYTE_1;
         }
         else
         {
@@ -84,51 +92,51 @@ uint8_t parser_appendByte(parser_t *parser, uint8_t *output_payload, uint8_t inp
         break;
 
     case STATE_LOOKING_FOR_START_BYTE_1:
-        if (input_data == START_BYTE_1){parser->state = STATE_PARSING_LENGTH;}
-        else{parser->state = STATE_LOOKING_FOR_START_BYTE_0;}
+        if (input_t->input_data == START_BYTE_1){input_t->parser->state = STATE_PARSING_LENGTH;}
+        else{input_t->parser->state = STATE_LOOKING_FOR_START_BYTE_0;}
         break;
     case STATE_PARSING_LENGTH:
-        parser->payload_length = input_data;
-        parser->state = STATE_PARSING_PAYLOAD;
+        input_t->parser->payload_length = input_t->input_data;
+        input_t->parser->state = STATE_PARSING_PAYLOAD;
         break;
     case STATE_PARSING_PAYLOAD:
-        if (parser->payload_buffer_index == 0)
+        if (input_t->parser->payload_buffer_index == 0)
         {
-            parser->payload_buffer = (uint8_t *)malloc(sizeof(uint8_t *) * parser->payload_length);
+            input_t->parser->payload_buffer = (uint8_t *)malloc(sizeof(uint8_t *) * input_t->parser->payload_length);
         }
-        parser->payload_buffer[parser->payload_buffer_index] = input_data;
-        ++parser->payload_buffer_index;
+        input_t->parser->payload_buffer[input_t->parser->payload_buffer_index] = input_t->input_data;
+        ++input_t->parser->payload_buffer_index;
 
-        if (parser->payload_buffer_index >= (parser->frame_len - FRAME_SIZE_OFFSET))
+        if (input_t->parser->payload_buffer_index >= (input_t->parser->frame_len - FRAME_SIZE_OFFSET))
         {
-            if (parser->payload_buffer_index - 2 > parser->payload_length)
+            if (input_t->parser->payload_buffer_index - 2 > input_t->parser->payload_length)
             {
                 return RESULT_FAILURE;
             }
-            parser->state = STATE_PARSING_CHECKSUM;
+            input_t->parser->state = STATE_PARSING_CHECKSUM;
         }
         break;
     case STATE_PARSING_CHECKSUM:
-        parser->checksum_buffer[parser->checksum_buffer_index] = input_data;
-        if (parser->checksum_buffer_index >= 1)
+        input_t->parser->checksum_buffer[input_t->parser->checksum_buffer_index] = input_t->input_data;
+        if (input_t->parser->checksum_buffer_index >= 1)
         {
-            if (parser->payload_length < parser->payload_buffer_index)
+            if (input_t->parser->payload_length < input_t->parser->payload_buffer_index)
             {
                 return RESULT_FAILURE;
             }
-            output_payload = (uint8_t *)malloc(sizeof(uint8_t *) * parser->payload_length);
-            parser->calculated_checksum = (parser->checksum_buffer[0] << 8 | parser->checksum_buffer[1]);
-            memcpy(output_payload, parser->payload_buffer, parser->payload_length);
-            parser->state = STATE_FRAME_RECEIVED;
+            input_t->output_payload = (uint8_t *)malloc(sizeof(uint8_t *) * input_t->parser->payload_length);
+            input_t->parser->calculated_checksum = (input_t->parser->checksum_buffer[0] << 8 | input_t->parser->checksum_buffer[1]);
+            memcpy(input_t->output_payload, input_t->parser->payload_buffer, input_t->parser->payload_length);
+            input_t->parser->state = STATE_FRAME_RECEIVED;
             return RESULT_SUCCESS;
         }
-        ++parser->checksum_buffer_index;
+        ++input_t->parser->checksum_buffer_index;
         break;
     case STATE_FRAME_RECEIVED:
-        parser->state = STATE_LOOKING_FOR_START_BYTE_0;
+        input_t->parser->state = STATE_LOOKING_FOR_START_BYTE_0;
         break;
     default:
-        parser->state = STATE_LOOKING_FOR_START_BYTE_0;
+        input_t->parser->state = STATE_LOOKING_FOR_START_BYTE_0;
     }
     return RESULT_SUCCESS;
 }
@@ -217,15 +225,21 @@ void check_frame(parser_t *parser)
 /// @param frame_len The length of the entire frame (all the bytes).
 void run_payload(uint8_t *frame_message, const uint8_t frame_len)
 {
+    
     parser_t parser;
     uint8_t *output_payload;
     uint8_t i;
+    parser_input_t parsed_data = {
+        .parser = &parser,
+        .output_payload = output_payload,
+    };
 
     parser_init(&parser, frame_len);
 
     for (i = 0; i < frame_len; i++)
     {
-        uint8_t byte_parsed = parser_appendByte(&parser, output_payload, frame_message[i]);
+        parsed_data.input_data = frame_message[i];
+        uint8_t byte_parsed = parser_appendByte(&parsed_data);
         if (byte_parsed != RESULT_SUCCESS)
         {
             check_frame(&parser);
@@ -294,6 +308,9 @@ void TEST_TWO_five_valid_frames_five_invalid_frames_singles(void)
     uint8_t validFrame10[24] = {0xFE, 0xFB, 0x13, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0x7E, 0xB4, 0x29, 0xBB};
     run_payload(validFrame10, sizeof(validFrame10));
 }
+void TEST_THREE_one_valid_frame_thread(void)
+{}
+
 int main()
 {
     TEST_ONE_eleven_valid_frames_singles();
