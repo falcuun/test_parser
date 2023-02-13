@@ -7,10 +7,7 @@
 
 #define START_BYTE_0 0xFE
 #define START_BYTE_1 0xFB
-#define MAX_PAYLOAD_LENGTH 255
-
 #define FRAME_SIZE_OFFSET 5 // To account for frame data (3 bytes in front (Start Bytes, Payload Length) and 2 in back (Checksum))
-
 
 enum PARSING_RESULT
 {
@@ -30,11 +27,11 @@ typedef enum
 
 typedef struct parser
 {
-    uint8_t frame_len; // The length of the entire frame
-
     parser_state_t state; // Current State in the state machine.
 
-    uint8_t *payload_buffer;      // The payload
+    uint8_t frame_len; // The length of the entire frame
+
+    uint8_t *payload_buffer;      // The payload ( Bytes in the Message between Length byte and Checksum Bytes)
     uint8_t payload_buffer_index; // Index to iterate over data(payload)
 
     uint8_t payload_length; // The length of Payload
@@ -42,7 +39,7 @@ typedef struct parser
     uint8_t checksum_buffer[2]; // Last Two Bytes (Fletcher16 Checksum split in two (uint8_t) bytes)
     uint8_t checksum_buffer_index;
 
-    uint16_t calculated_checksum;
+    uint16_t received_checksum;
 } parser_t;
 
 typedef struct frame
@@ -54,10 +51,9 @@ typedef struct frame
 // Forward Declarations
 void parser_init(parser_t *parser, uint8_t frame_len);
 uint16_t fletcher16(uint8_t *data, int count);
-uint8_t parser_appendByte(parser_t *parser, uint8_t *output_payload, uint8_t input_data);
+uint8_t parser_appendByte(parser_t *parser, uint8_t **output_payload, uint8_t input_data);
 void parser_init(parser_t *parser, uint8_t frame_len);
-bool is_frame_valid(uint8_t *data, uint8_t data_len, uint16_t data_checksum);
-void check_frame(parser_t *parser);
+bool is_checksum_valid(uint8_t *data, uint8_t data_len, uint16_t data_checksum);
 void run_payload(frame_t *frame);
 
 /// @brief Calculates Fletcher16 checksum
@@ -82,7 +78,7 @@ uint16_t fletcher16(uint8_t *data, int count)
 /// @param output_payload Pointer to array for payload data
 /// @param input_data  The byte that is to be checked.
 /// @return retunrs Failure or Success based on if there is any errors
-uint8_t parser_appendByte(parser_t *parser, uint8_t *output_payload, uint8_t input_data)
+uint8_t parser_appendByte(parser_t *parser, uint8_t **output_payload, uint8_t input_data)
 {
     switch (parser->state)
     {
@@ -93,6 +89,7 @@ uint8_t parser_appendByte(parser_t *parser, uint8_t *output_payload, uint8_t inp
         }
         else
         {
+            printf("Payload is Invalid!\n");
             return RESULT_FAILURE;
         }
         break;
@@ -107,46 +104,66 @@ uint8_t parser_appendByte(parser_t *parser, uint8_t *output_payload, uint8_t inp
             parser->state = STATE_LOOKING_FOR_START_BYTE_0;
         }
         break;
+
     case STATE_PARSING_LENGTH:
         parser->payload_length = input_data;
         parser->state = STATE_PARSING_PAYLOAD;
         break;
+
     case STATE_PARSING_PAYLOAD:
         if (parser->payload_buffer_index == 0)
         {
-            parser->payload_buffer = (uint8_t *)malloc(sizeof(uint8_t *) * parser->payload_length);
+            parser->payload_buffer = (uint8_t *)malloc(sizeof(uint8_t) * parser->payload_length);
         }
-        parser->payload_buffer[parser->payload_buffer_index] = input_data;
-        ++parser->payload_buffer_index;
+        parser->payload_buffer[parser->payload_buffer_index++] = input_data;
 
         if (parser->payload_buffer_index >= (parser->frame_len - FRAME_SIZE_OFFSET))
         {
-            if (parser->payload_buffer_index - 2 > parser->payload_length)
+            if (parser->payload_buffer_index > parser->payload_length)
             {
+                printf("Payload is Invalid!\n");
                 return RESULT_FAILURE;
             }
             parser->state = STATE_PARSING_CHECKSUM;
         }
         break;
+
     case STATE_PARSING_CHECKSUM:
         parser->checksum_buffer[parser->checksum_buffer_index] = input_data;
         if (parser->checksum_buffer_index >= 1)
         {
-            if (parser->payload_length < parser->payload_buffer_index)
+            if (parser->payload_buffer_index > parser->payload_length)
             {
+                printf("Payload is Invalid!\n");
                 return RESULT_FAILURE;
             }
-            output_payload = (uint8_t *)malloc(sizeof(uint8_t *) * parser->payload_length);
-            parser->calculated_checksum = (parser->checksum_buffer[0] << 8 | parser->checksum_buffer[1]);
-            memcpy(output_payload, parser->payload_buffer, parser->payload_length);
+            parser->received_checksum = (parser->checksum_buffer[0] << 8 | parser->checksum_buffer[1]);
+            if (is_checksum_valid(parser->payload_buffer, parser->payload_length, parser->received_checksum))
+            {
+                *output_payload = parser->payload_buffer;
+                printf("Payload is Valid!\n");
+                printf("Payload Length %d, Checksum: %x, Data: ", parser->payload_length, parser->received_checksum);
+                for (uint8_t i = 0; i < parser->payload_length; i++)
+                {
+                    printf("%x, ", output_payload[0][i]);
+                }
+                printf("\n");
+            }
+            else
+            {
+                printf("Payload is Invalid!\n");
+                return RESULT_FAILURE;
+            }
             parser->state = STATE_FRAME_RECEIVED;
             return RESULT_SUCCESS;
         }
         ++parser->checksum_buffer_index;
         break;
+
     case STATE_FRAME_RECEIVED:
         parser->state = STATE_LOOKING_FOR_START_BYTE_0;
         break;
+
     default:
         parser->state = STATE_LOOKING_FOR_START_BYTE_0;
     }
@@ -161,9 +178,10 @@ void parser_init(parser_t *parser, uint8_t frame_len)
     parser->frame_len = frame_len;
     parser->state = STATE_LOOKING_FOR_START_BYTE_0;
     parser->payload_buffer_index = 0;
+    parser->payload_buffer = 0;
     parser->checksum_buffer_index = 0;
     parser->payload_length = 0;
-    parser->calculated_checksum = 0;
+    parser->received_checksum = 0;
 }
 
 /*
@@ -197,7 +215,7 @@ frame_t *parse(uint8_t message[], size_t message_len)
 /// @param data_len Length of data to calculate
 /// @param data_checksum The checksum coming from the payload
 /// @return
-bool is_frame_valid(uint8_t *data, uint8_t data_len, uint16_t data_checksum)
+bool is_checksum_valid(uint8_t *data, uint8_t data_len, uint16_t data_checksum)
 {
     if (data_len < 1)
     {
@@ -212,26 +230,6 @@ bool is_frame_valid(uint8_t *data, uint8_t data_len, uint16_t data_checksum)
     return true;
 }
 
-/// @brief Calls the verifying function and does the printing of the message for the user.
-/// @param parser Parser structure that holds the data and checksum that need to be checked.
-void check_frame(parser_t *parser)
-{
-    if (is_frame_valid(parser->payload_buffer, parser->payload_length, parser->calculated_checksum))
-    {
-        printf("Payload is Valid!\n");
-        printf("Payload Length %d, Checksum: %x, Data: ", parser->payload_length, parser->calculated_checksum);
-        for (uint8_t i = 0; i < parser->payload_length; i++)
-        {
-            printf("%x, ", parser->payload_buffer[i]);
-        }
-        printf("\n");
-    }
-    else
-    {
-        printf("Payload is NOT Valid!\n");
-    }
-}
-
 /// @brief Runs the frame validation process.
 /// @param frame The structure containing the frame message and its length.
 void run_payload(frame_t *frame)
@@ -244,17 +242,15 @@ void run_payload(frame_t *frame)
 
     for (i = 0; i < frame->frame_len; i++)
     {
-        uint8_t byte_parsed = parser_appendByte(&parser, output_payload, frame->frame_message[i]);
+        uint8_t byte_parsed = parser_appendByte(&parser, &output_payload, frame->frame_message[i]);
         if (byte_parsed != RESULT_SUCCESS)
         {
-            check_frame(&parser);
             return;
         }
     }
 
-    check_frame(&parser);
-
-    free(parser.payload_buffer);
+    parser_init(&parser, frame->frame_len);
+    free(output_payload);
 }
 
 void *run_payload_thread(void *frame)
@@ -266,6 +262,7 @@ void *run_payload_thread(void *frame)
 void TEST_ONE_eleven_valid_frames_singles(void)
 {
     frame_t frame;
+
     uint8_t validFrame1[14] = {0xFE, 0xFB, 0x09, 0x08, 0x01, 0xC0, 0xDE, 0xAB, 0x81, 0xC0, 0xDE, 0x5C, 0x8B, 0xD1};
     frame.frame_message = validFrame1;
     frame.frame_len = sizeof(validFrame1);
@@ -423,23 +420,31 @@ void TEST_FOUR_multiple_valid_frames_multiple_threads(void)
     for (i = 0; i < NUMBER_OF_FRAMES; i++)
     {
         ret = pthread_create(&threads[i], NULL, run_payload_thread, (void *)&frames[i]);
-                if (ret != 0)
+        if (ret != 0)
         {
             printf("Error creating thread: %d", threads[i]);
             continue;
         }
     }
 
-    for (i = 0; i < NUMBER_OF_FRAMES; i++) {
+    for (i = 0; i < NUMBER_OF_FRAMES; i++)
+    {
         pthread_join(threads[i], NULL);
     }
 }
 
 int main()
 {
-    // TEST_ONE_eleven_valid_frames_singles();
-    // TEST_TWO_five_valid_frames_five_invalid_frames_singles();
+    //    TEST_ONE_eleven_valid_frames_singles();
+    TEST_TWO_five_valid_frames_five_invalid_frames_singles();
     // TEST_THREE_one_valid_frame_one_thread();
-    // TEST_FOUR_multiple_valid_frames_multiple_threads();
+    //  TEST_FOUR_multiple_valid_frames_multiple_threads();
+
+    // frame_t frame;
+    // uint8_t validFrame10[24] = {0xFE, 0xFB, 0x13, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0x7E, 0xB4, 0x29, 0xBB};
+    // frame.frame_message = validFrame10;
+    // frame.frame_len = sizeof(validFrame10);
+    // run_payload(&frame);
+
     return 0;
 }
