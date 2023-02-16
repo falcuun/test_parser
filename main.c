@@ -435,10 +435,10 @@ void TEST_FOUR_multiple_valid_frames_multiple_threads(void)
 
 int main()
 {
-    //    TEST_ONE_eleven_valid_frames_singles();
+    TEST_ONE_eleven_valid_frames_singles();
     TEST_TWO_five_valid_frames_five_invalid_frames_singles();
-    // TEST_THREE_one_valid_frame_one_thread();
-    //  TEST_FOUR_multiple_valid_frames_multiple_threads();
+    TEST_THREE_one_valid_frame_one_thread();
+    TEST_FOUR_multiple_valid_frames_multiple_threads();
 
     // frame_t frame;
     // uint8_t validFrame10[24] = {0xFE, 0xFB, 0x13, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0x7E, 0xB4, 0x29, 0xBB};
